@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3b6fa0"/>
+      <stop offset="1" stop-color="#244a70"/>
+    </linearGradient>
+    <linearGradient id="p" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fffdf8"/>
+      <stop offset="1" stop-color="#f1ece0"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#g)"/>
+  <!-- page -->
+  <path d="M300 220h330l120 120v464a30 30 0 0 1-30 30H300a30 30 0 0 1-30-30V250a30 30 0 0 1 30-30z" fill="url(#p)"/>
+  <path d="M630 220v90a30 30 0 0 0 30 30h90z" fill="#d9d1bf"/>
+  <!-- M -->
+  <path d="M330 600V400h52l56 80 56-80h52v200h-54V492l-54 72-54-72v108z" fill="#2f5d8a"/>
+  <!-- down arrow -->
+  <path d="M620 400h52v110h40l-66 86-66-86h40z" fill="#2f5d8a"/>
+  <!-- text lines -->
+  <rect x="340" y="660" width="340" height="22" rx="11" fill="#cfc6b2"/>
+  <rect x="340" y="710" width="260" height="22" rx="11" fill="#cfc6b2"/>
+</svg>
