@@ -6,10 +6,23 @@
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
   const MD = window.MD;
 
+  // Desktop (Tauri) build: native dialogs, file access and menus.
+  const TAURI = window.__TAURI__ || null;
+  const isMac = /Mac/.test(navigator.platform || navigator.userAgent);
+  if (TAURI) document.documentElement.classList.add('desktop');
+  if (TAURI && isMac) document.documentElement.classList.add('desktop-mac');
+  const invoke = TAURI ? TAURI.core.invoke : null;
+
   const CDN = {
     katexJs: 'https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js',
     katexCss: 'https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css',
     hljs: 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js',
+  };
+  // The desktop build bundles these libraries (see scripts/build-web.js).
+  const LOCAL = {
+    katexJs: 'vendor/katex/katex.min.js',
+    katexCss: 'vendor/katex/katex.min.css',
+    hljs: 'vendor/highlight.min.js',
   };
 
   const store = {
@@ -33,6 +46,7 @@
   const state = {
     name: 'Untitled.md',
     handle: null, // FileSystemFileHandle when available
+    path: null, // absolute path in the desktop build
     dirStack: null, // [rootDirHandle, ..., parentDirOfFile] for resolving images
     rootDir: null,
     dirty: false,
@@ -50,7 +64,10 @@
         s.src = url;
         s.async = true;
         s.onload = resolve;
-        s.onerror = () => reject(new Error('Could not load ' + url));
+        s.onerror = () => {
+          s.remove();
+          reject(new Error('Could not load ' + url));
+        };
         document.head.appendChild(s);
       });
     }
@@ -64,14 +81,22 @@
     document.head.appendChild(l);
   }
 
+  // Resolves with the URL that loaded: bundled copy first in the desktop app.
+  function loadLib(key) {
+    const cdn = () => loadScript(CDN[key]).then(() => 'cdn');
+    if (!TAURI) return cdn();
+    return loadScript(LOCAL[key]).then(() => 'local', cdn);
+  }
   function ensureKatex() {
     if (window.katex) return Promise.resolve(window.katex);
-    loadCss(CDN.katexCss);
-    return loadScript(CDN.katexJs).then(() => window.katex);
+    return loadLib('katexJs').then((from) => {
+      loadCss(from === 'local' ? LOCAL.katexCss : CDN.katexCss);
+      return window.katex;
+    });
   }
   function ensureHljs() {
     if (window.hljs) return Promise.resolve(window.hljs);
-    return loadScript(CDN.hljs).then(() => window.hljs);
+    return loadLib('hljs').then(() => window.hljs);
   }
 
   // Typeset math, highlight code and resolve local images inside an element.
@@ -110,8 +135,34 @@
   }
 
   const assetCache = new Map();
+  function joinPath(base, rel) {
+    const out = [];
+    (base + '/' + rel).split('/').forEach((p, k) => {
+      if (p === '..') out.pop();
+      else if (p !== '.' && (p !== '' || k === 0)) out.push(p);
+    });
+    return out.join('/');
+  }
+
   async function resolveImage(img) {
     const src = img.getAttribute('src') || '';
+    if (TAURI) {
+      if (/^[a-z]+:/i.test(src) || src.startsWith('#')) return;
+      if (!src.startsWith('/') && !state.path) return;
+      const file = src.startsWith('/') ? decodeURIComponent(src) : joinPath(dirname(state.path), decodeURIComponent(src.split(/[?#]/)[0]));
+      if (assetCache.has(file)) {
+        img.src = assetCache.get(file);
+        return;
+      }
+      try {
+        const url = await invoke('read_data_url', { path: file });
+        assetCache.set(file, url);
+        img.src = url;
+      } catch (e) {
+        img.title = 'Image not found: ' + file;
+      }
+      return;
+    }
     if (!state.dirStack || /^([a-z]+:|\/|#)/i.test(src)) return;
     if (assetCache.has(src)) {
       img.src = assetCache.get(src);
@@ -160,7 +211,10 @@
       document.body.classList.remove('editing-none');
       typewriterScroll();
     },
-    openLink: (href) => window.open(href, '_blank', 'noopener'),
+    openLink: (href) => {
+      if (TAURI && /^(https?|mailto):/i.test(href)) TAURI.opener.openUrl(href);
+      else window.open(href, '_blank', 'noopener');
+    },
   });
 
   docEl.addEventListener('focusout', () => {
@@ -173,20 +227,35 @@
     return state.sourceMode ? sourceEl.value : editor.getMarkdown();
   }
 
-  function loadText(text, name, handle, dirStack) {
+  function basename(p) {
+    return String(p).split(/[\\/]/).pop();
+  }
+  function dirname(p) {
+    return String(p).replace(/[\\/][^\\/]*$/, '');
+  }
+
+  function setTitle() {
+    $('#doc-name').textContent = state.name;
+    $('#doc-name').title = state.path || '';
+    const t = state.name.replace(/\.(md|markdown|txt)$/i, '') + ' — MDreader';
+    document.title = t;
+    if (TAURI) TAURI.window.getCurrentWindow().setTitle(state.name).catch(() => {});
+  }
+
+  function loadText(text, name, handle, dirStack, filePath) {
     if (state.sourceMode) toggleSource(false);
     state.name = name || 'Untitled.md';
     state.handle = handle || null;
     state.dirStack = dirStack || null;
-    assetCache.forEach((url) => URL.revokeObjectURL(url));
+    state.path = filePath || null;
+    assetCache.forEach((url) => url.startsWith('blob:') && URL.revokeObjectURL(url));
     assetCache.clear();
     editor.setMarkdown(text);
     state.savedText = editor.getMarkdown();
     updateDirty();
     scroller.scrollTop = 0;
-    $('#doc-name').textContent = state.name;
-    document.title = state.name.replace(/\.(md|markdown|txt)$/i, '') + ' — MDreader';
-    store.set('draft', { name: state.name, text: state.savedText, saved: true });
+    setTitle();
+    store.set('draft', { name: state.name, text: state.savedText, saved: true, path: state.path });
     highlightCurrentFile();
     buildOutline();
     updateStats();
@@ -201,7 +270,7 @@
   function scheduleDraft() {
     clearTimeout(draftTimer);
     draftTimer = setTimeout(() => {
-      store.set('draft', { name: state.name, text: currentText(), saved: !state.dirty });
+      store.set('draft', { name: state.name, text: currentText(), saved: !state.dirty, path: state.path });
       updateStats();
     }, 400);
   }
@@ -211,18 +280,40 @@
   const hasFS = 'showOpenFilePicker' in window;
   const MD_TYPES = [{ description: 'Markdown', accept: { 'text/markdown': ['.md', '.markdown', '.mdown', '.mkd', '.txt'] } }];
 
-  function confirmDiscard() {
-    return !state.dirty || window.confirm('You have unsaved changes in "' + state.name + '". Discard them?');
+  async function confirmDiscard() {
+    if (!state.dirty) return true;
+    const msg = 'You have unsaved changes in "' + state.name + '". Discard them?';
+    if (TAURI) return TAURI.dialog.ask(msg, { title: 'Unsaved changes', kind: 'warning', okLabel: 'Discard', cancelLabel: 'Cancel' });
+    return window.confirm(msg);
+  }
+
+  const MD_EXTS = ['md', 'markdown', 'mdown', 'mkd', 'txt'];
+
+  async function openPath(p) {
+    try {
+      const text = await invoke('read_text', { path: p });
+      loadText(text, basename(p), null, null, p);
+      state.currentPath = p;
+      highlightCurrentFile();
+      flash('Opened ' + basename(p));
+    } catch (e) {
+      flash('Could not open ' + basename(p) + ': ' + e);
+    }
   }
 
   async function cmdNew() {
-    if (!confirmDiscard()) return;
+    if (!(await confirmDiscard())) return;
     loadText('', 'Untitled.md');
     editor.focusBlock(editor.blocks[0].id);
   }
 
   async function cmdOpen() {
-    if (!confirmDiscard()) return;
+    if (!(await confirmDiscard())) return;
+    if (TAURI) {
+      const p = await TAURI.dialog.open({ multiple: false, directory: false, filters: [{ name: 'Markdown', extensions: MD_EXTS }] });
+      if (p) await openPath(p);
+      return;
+    }
     if (hasFS) {
       try {
         const [h] = await window.showOpenFilePicker({ types: MD_TYPES });
@@ -250,6 +341,16 @@
     if (state.sourceMode) syncFromSource();
     editor.commit();
     const text = currentText();
+    if (TAURI && state.path) {
+      try {
+        await invoke('write_text', { path: state.path, contents: text });
+        markSaved(text);
+        flash('Saved ' + state.name);
+      } catch (e) {
+        flash('Save failed: ' + e);
+      }
+      return;
+    }
     if (state.handle && state.handle.createWritable) {
       try {
         const w = await state.handle.createWritable();
@@ -271,6 +372,22 @@
     if (state.sourceMode) syncFromSource();
     editor.commit();
     const text = currentText();
+    if (TAURI) {
+      const p = await saveDialog(state.path || state.name, 'Markdown', MD_EXTS);
+      if (!p) return;
+      try {
+        await invoke('write_text', { path: p, contents: text });
+        state.path = p;
+        state.handle = null;
+        state.name = basename(p);
+        setTitle();
+        markSaved(text);
+        flash('Saved ' + state.name);
+      } catch (e) {
+        flash('Save failed: ' + e);
+      }
+      return;
+    }
     if ('showSaveFilePicker' in window) {
       try {
         const h = await window.showSaveFilePicker({ suggestedName: state.name, types: MD_TYPES });
@@ -279,7 +396,7 @@
         await w.close();
         state.handle = h;
         state.name = h.name;
-        $('#doc-name').textContent = state.name;
+        setTitle();
         markSaved(text);
         flash('Saved ' + state.name);
       } catch (e) {
@@ -287,7 +404,7 @@
       }
       return;
     }
-    download(state.name, text, 'text/markdown');
+    await download(state.name, text, 'text/markdown');
     markSaved(text);
     flash('Downloaded ' + state.name);
   }
@@ -295,10 +412,22 @@
   function markSaved(text) {
     state.savedText = text;
     updateDirty();
-    store.set('draft', { name: state.name, text, saved: true });
+    store.set('draft', { name: state.name, text, saved: true, path: state.path });
   }
 
-  function download(name, content, type) {
+  function saveDialog(defaultPath, label, exts) {
+    return TAURI.dialog.save({ defaultPath, filters: [{ name: label, extensions: exts }] });
+  }
+
+  async function download(name, content, type) {
+    if (TAURI) {
+      const ext = name.split('.').pop();
+      const base = state.path ? dirname(state.path) + '/' + name : name;
+      const p = await saveDialog(base, ext.toUpperCase(), [ext]);
+      if (!p) return false;
+      await invoke('write_text', { path: p, contents: content });
+      return true;
+    }
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([content], { type: type + ';charset=utf-8' }));
     a.download = name;
@@ -311,6 +440,18 @@
   }
 
   async function cmdOpenFolder() {
+    if (TAURI) {
+      const dir = await TAURI.dialog.open({ directory: true, multiple: false });
+      if (!dir) return;
+      showTab('files');
+      const toNode = (e) =>
+        e.children
+          ? { name: e.name, isDir: true, children: e.children.map(toNode) }
+          : { name: e.name, key: e.path, open: () => openPath(e.path) };
+      const entries = await invoke('list_markdown', { dir });
+      renderTree({ name: basename(dir), children: entries.map(toNode) });
+      return;
+    }
     if (!('showDirectoryPicker' in window)) {
       $('#folder-hint').textContent = 'Opening folders needs Chrome, Edge or another Chromium-based browser. You can still open single files.';
       showTab('files');
@@ -322,25 +463,39 @@
       showTab('files');
       $('#file-tree').innerHTML = '<li class="dir"><span>Loading…</span></li>';
       const tree = await readTree(dir, 0);
+      tree.name = dir.name;
       renderTree(tree);
     } catch (e) {
       if (e.name !== 'AbortError') flash('Could not open folder: ' + e.message);
     }
   }
 
-  async function readTree(dir, depth) {
-    const node = { name: dir.name, dir, children: [] };
+  // Web build: walk a FileSystemDirectoryHandle into a tree of
+  // { name, isDir, children } / { name, key, open } nodes.
+  async function readTree(dir, depth, stack) {
+    stack = stack || [dir];
+    const node = { name: dir.name, isDir: true, children: [] };
     if (depth > 4) return node;
     for await (const [name, h] of dir.entries()) {
       if (name.startsWith('.') || name === 'node_modules') continue;
       if (h.kind === 'directory') {
-        const child = await readTree(h, depth + 1);
+        const child = await readTree(h, depth + 1, stack.concat(h));
         if (child.children.length) node.children.push(child);
       } else if (/\.(md|markdown|mdown|mkd|txt)$/i.test(name)) {
-        node.children.push({ name, file: h });
+        const key = stack.map((d) => d.name).concat(name).join('/');
+        node.children.push({
+          name,
+          key,
+          open: async () => {
+            const f = await h.getFile();
+            loadText(await f.text(), f.name, h, stack);
+            state.currentPath = key;
+            highlightCurrentFile();
+          },
+        });
       }
     }
-    node.children.sort((a, b) => (!!b.dir - !!a.dir) || a.name.localeCompare(b.name, undefined, { numeric: true }));
+    node.children.sort((a, b) => !!b.isDir - !!a.isDir || a.name.localeCompare(b.name, undefined, { numeric: true }));
     return node;
   }
 
@@ -348,29 +503,26 @@
     const ul = $('#file-tree');
     ul.innerHTML = '';
     $('#files .empty-note').hidden = true;
-    const build = (node, parentUl, stack) => {
+    const build = (node, parentUl) => {
       node.children.forEach((c) => {
         const li = document.createElement('li');
         const span = document.createElement('span');
         span.textContent = c.name;
         li.appendChild(span);
         parentUl.appendChild(li);
-        if (c.dir) {
+        if (c.isDir) {
           li.className = 'dir';
           const sub = document.createElement('ul');
           li.appendChild(sub);
           span.addEventListener('click', () => (sub.hidden = !sub.hidden));
-          build(c, sub, stack.concat(c.dir));
+          build(c, sub);
         } else {
           li.className = 'file';
-          li.dataset.path = stack.map((d) => d.name).concat(c.name).join('/');
-          span.title = li.dataset.path;
+          li.dataset.path = c.key;
+          span.title = c.key;
           span.addEventListener('click', async () => {
-            if (!confirmDiscard()) return;
-            const f = await c.file.getFile();
-            loadText(await f.text(), f.name, c.file, stack);
-            state.currentPath = li.dataset.path;
-            highlightCurrentFile();
+            if (!(await confirmDiscard())) return;
+            await c.open();
             if (window.matchMedia('(max-width: 760px)').matches) document.body.classList.remove('sidebar-open');
           });
         }
@@ -381,7 +533,7 @@
     head.innerHTML = '<span></span>';
     head.firstChild.textContent = root.name;
     ul.appendChild(head);
-    build(root, ul, [root.dir]);
+    build(root, ul);
     if (!root.children.length) {
       const li = document.createElement('li');
       li.innerHTML = '<span>No markdown files here.</span>';
@@ -390,7 +542,8 @@
   }
 
   function highlightCurrentFile() {
-    $$('#file-tree li.file').forEach((li) => li.classList.toggle('current', li.dataset.path === state.currentPath && !!state.dirStack));
+    const open = state.path || (state.dirStack ? state.currentPath : null);
+    $$('#file-tree li.file').forEach((li) => li.classList.toggle('current', !!open && li.dataset.path === open));
   }
 
   // PWA file handling: opening .md files from the OS into the installed app.
@@ -434,13 +587,35 @@
       flash('Not a markdown file: ' + f.name);
       return;
     }
-    if (!confirmDiscard()) return;
+    if (!(await confirmDiscard())) return;
     loadText(await f.text(), f.name, handle && handle.kind === 'file' ? handle : null);
     flash('Opened ' + f.name);
   });
 
+  if (TAURI) {
+    const listen = TAURI.event.listen;
+    listen('tauri://drag-enter', () => ($('#drop-overlay').hidden = false));
+    listen('tauri://drag-leave', () => ($('#drop-overlay').hidden = true));
+    listen('tauri://drag-drop', async (e) => {
+      $('#drop-overlay').hidden = true;
+      const p = ((e.payload && e.payload.paths) || []).find((x) => /\.(md|markdown|mdown|mkd|txt)$/i.test(x));
+      if (!p) return flash('Not a markdown file');
+      if (await confirmDiscard()) openPath(p);
+    });
+    listen('menu', (e) => runCommand(e.payload, 'menu'));
+    const takeOpened = async () => {
+      const files = await invoke('take_opened_files');
+      if (files.length && (await confirmDiscard())) openPath(files[files.length - 1]);
+    };
+    listen('files-opened', takeOpened);
+    setTimeout(takeOpened, 0);
+    TAURI.window.getCurrentWindow().onCloseRequested(async (e) => {
+      if (state.dirty && !(await confirmDiscard())) e.preventDefault();
+    });
+  }
+
   window.addEventListener('beforeunload', (e) => {
-    if (state.dirty) {
+    if (state.dirty && !TAURI) {
       e.preventDefault();
       e.returnValue = '';
     }
@@ -698,7 +873,7 @@ img{max-width:100%}hr{border:0;height:1px;background:#e3dfd6}mark{background:#fb
         wrap.querySelectorAll('.math-inline, .math-block').forEach((m) =>
           katex.render(m.dataset.tex, m, { displayMode: m.classList.contains('math-block'), throwOnError: false })
         );
-        katexLink = '<link rel="stylesheet" href="' + CDN.katexCss + '">';
+        katexLink = '<link rel="stylesheet" href="' + CDN.katexCss + '">'; // exported files always use the CDN
       } catch (e) {
         /* leave TeX source visible */
       }
@@ -708,14 +883,18 @@ img{max-width:100%}hr{border:0;height:1px;background:#e3dfd6}mark{background:#fb
       '<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">' +
       '<title>' + title + '</title>' + katexLink + '<style>' + EXPORT_CSS + '</style></head><body>' +
       wrap.outerHTML + '</body></html>\n';
-    download(state.name.replace(/\.(md|markdown|mdown|mkd|txt)$/i, '') + '.html', html, 'text/html');
-    flash('Exported HTML');
+    if (await download(state.name.replace(/\.(md|markdown|mdown|mkd|txt)$/i, '') + '.html', html, 'text/html')) flash('Exported HTML');
   }
 
   function cmdPrint() {
     editor.commit();
     if (state.sourceMode) toggleSource(false);
-    window.print();
+    if (TAURI) invoke('print_page').catch((e) => flash('Print failed: ' + e));
+    else window.print();
+  }
+
+  async function cmdQuit() {
+    if (await confirmDiscard()) invoke('quit_app');
   }
 
   // ------------------------------------------------------- copy support
@@ -750,13 +929,31 @@ img{max-width:100%}hr{border:0;height:1px;background:#e3dfd6}mark{background:#fb
     saveAs: cmdSaveAs,
     exportHtml: cmdExportHtml,
     print: cmdPrint,
+    quit: cmdQuit,
+    sidebar: () => toggleSidebar(),
+    source: () => toggleSource(),
+    focus: () => toggleFocus(),
+    typewriter: () => toggleTypewriter(),
+    lock: () => toggleLock(),
   };
+
+  // In the desktop app one shortcut can arrive twice: as a key event in the
+  // page and again from the native menu. Drop the echo from the other source.
+  const lastRun = {};
+  function runCommand(name, via) {
+    if (!commands[name]) return;
+    const now = Date.now();
+    const prev = lastRun[name];
+    if (TAURI && prev && prev.via !== via && now - prev.at < 300) return;
+    lastRun[name] = { via, at: now };
+    commands[name]();
+  }
 
   document.addEventListener('click', (e) => {
     const cmdBtn = e.target.closest('[data-cmd]');
     if (cmdBtn) {
       closeMenus();
-      commands[cmdBtn.dataset.cmd]();
+      runCommand(cmdBtn.dataset.cmd, 'click');
       return;
     }
     if (!e.target.closest('.menu-wrap')) closeMenus();
@@ -802,28 +999,34 @@ img{max-width:100%}hr{border:0;height:1px;background:#e3dfd6}mark{background:#fb
     if (e.key === 'Escape') closeMenus();
     if (mod && key === 's') {
       e.preventDefault();
-      e.shiftKey ? cmdSaveAs() : cmdSave();
+      runCommand(e.shiftKey ? 'saveAs' : 'save', 'key');
     } else if (mod && key === 'o') {
       e.preventDefault();
-      cmdOpen();
+      runCommand(e.shiftKey ? 'openFolder' : 'open', 'key');
     } else if (mod && key === 'n' && !e.shiftKey) {
       e.preventDefault();
-      cmdNew();
+      runCommand('new', 'key');
     } else if (mod && key === 'p') {
       e.preventDefault();
-      cmdPrint();
+      runCommand('print', 'key');
+    } else if (mod && key === 'q' && TAURI) {
+      e.preventDefault();
+      runCommand('quit', 'key');
     } else if (mod && (e.key === '/' || e.code === 'Slash')) {
       e.preventDefault();
-      toggleSource();
+      runCommand('source', 'key');
     } else if (mod && e.key === '\\') {
       e.preventDefault();
-      toggleSidebar();
+      runCommand('sidebar', 'key');
+    } else if (mod && e.shiftKey && key === 'l') {
+      e.preventDefault();
+      runCommand('lock', 'key');
     } else if (e.key === 'F8') {
       e.preventDefault();
-      toggleFocus();
+      runCommand('focus', 'key');
     } else if (e.key === 'F9') {
       e.preventDefault();
-      toggleTypewriter();
+      runCommand('typewriter', 'key');
     } else if (mod && key === 'z' && !inBlock && !inSource && !/INPUT|TEXTAREA/.test(e.target.tagName)) {
       e.preventDefault();
       e.shiftKey ? editor.redo() : editor.undo();
@@ -853,9 +1056,17 @@ img{max-width:100%}hr{border:0;height:1px;background:#e3dfd6}mark{background:#fb
   }
   document.body.classList.add('editing-none');
 
+  if (isMac) {
+    $$('kbd').forEach((k) => (k.textContent = k.textContent.replace(/Ctrl\+/g, '⌘').replace(/Shift\+/g, '⇧')));
+  }
+  if (TAURI) {
+    $('#topbar').setAttribute('data-tauri-drag-region', '');
+    $('.bar-title').setAttribute('data-tauri-drag-region', '');
+  }
+
   const draft = store.get('draft', null);
   if (draft && typeof draft.text === 'string' && draft.text.trim()) {
-    loadText(draft.text, draft.name);
+    loadText(draft.text, draft.name, null, null, TAURI ? draft.path : null);
     if (!draft.saved) {
       state.savedText = '';
       updateDirty();

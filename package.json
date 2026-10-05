@@ -5,6 +5,15 @@
   "description": "Typora-style markdown reader and editor for academics working with AI",
   "scripts": {
     "start": "python3 -m http.server 8000",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "build:web": "node scripts/build-web.js",
+    "icons": "tauri icon src-tauri/app-icon.png",
+    "mac:dev": "npm run icons && npm run build:web && tauri dev",
+    "mac:build": "npm run icons && npm run build:web && tauri build --target universal-apple-darwin"
+  },
+  "devDependencies": {
+    "@highlightjs/cdn-assets": "^11.9.0",
+    "@tauri-apps/cli": "^2.0.0",
+    "katex": "^0.16.11"
   }
 }

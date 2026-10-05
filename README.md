@@ -4,7 +4,33 @@ Personalized reader of .md documents for academics working with AI.
 
 MDreader is a Typora-style markdown reader and editor. Documents look typeset. When you click a block (a paragraph, heading, list, table, equation or code block), it shows its raw markdown so you can edit it in place. Click away and it renders again. There is no split preview pane and no build step, and it has no dependencies.
 
-## Running it
+## Mac app
+
+MDreader also builds as a native macOS app (Apple Silicon and Intel) using [Tauri](https://tauri.app). It adds:
+
+- a real menu bar (File, Edit, View, Window) with the usual ⌘ shortcuts;
+- native Open / Save dialogs, saving straight to disk with no permission prompts;
+- double-clicking `.md` files in Finder, or *Open With → MDreader*;
+- dropping files on the window or the Dock icon;
+- math and code highlighting bundled in, so it works fully offline.
+
+**Getting the app.** Every pull request and push to `main` builds a disk image on GitHub Actions: open the run under the repository's *Actions* tab and download **MDreader-macOS** from *Artifacts*. Pushing a tag like `v0.1.0` attaches the `.dmg` to a GitHub release.
+
+**First launch.** The app isn't signed with an Apple Developer ID, so macOS will refuse to open it the first time. Drag it to Applications, then either right-click it and choose **Open**, or run:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/MDreader.app
+```
+
+**Building it yourself** (needs Node 18+, Rust and Xcode Command Line Tools):
+
+```sh
+npm install
+npm run mac:dev      # run in development
+npm run mac:build    # universal .dmg in src-tauri/target/universal-apple-darwin/release/bundle/dmg/
+```
+
+## Running it in a browser
 
 - **Quickest:** open `index.html` in a browser. Everything works from `file://`.
 - **Recommended:** serve the folder, for example with `python3 -m http.server`, and visit `http://localhost:8000`. In Chrome or Edge you can then use *Install app* to get a standalone window that opens `.md` files from your file manager. It also works offline after the first visit.
@@ -49,5 +75,7 @@ js/editor.js        block editor: click-to-edit, keyboard handling, undo
 js/app.js           files, folders, outline, modes, appearance, export
 js/welcome.js       first-run document
 sw.js, manifest     offline cache and installable-app metadata
+src-tauri/          macOS app shell (Rust): menus, file access, Finder integration
+scripts/build-web.js  copies the web app + bundled KaTeX/highlight.js into dist/ for the app
 tests/              unit tests for the markdown engine: `node --test tests/*.test.js`
 ```

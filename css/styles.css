@@ -120,6 +120,10 @@ body {
 
 button { font: inherit; color: inherit; }
 
+/* Desktop app on macOS: the title bar is ours, leave room for the traffic lights */
+.desktop-mac #topbar { padding-left: 80px; height: 40px; }
+.desktop #topbar, .desktop #statusbar { user-select: none; -webkit-user-select: none; }
+
 #topbar {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
