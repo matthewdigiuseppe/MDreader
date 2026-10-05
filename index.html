@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MDreader</title>
+  <meta name="description" content="A distraction-free, live-preview markdown reader and editor for academics.">
+  <meta name="theme-color" content="#fbfaf7">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <header id="topbar">
+    <div class="bar-left">
+      <button class="icon-btn" id="btn-sidebar" title="Toggle sidebar (Ctrl+\)" aria-label="Toggle sidebar">
+        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
+      </button>
+      <div class="menu-wrap">
+        <button class="text-btn" id="btn-file" aria-haspopup="true">File</button>
+        <div class="menu" id="menu-file" hidden>
+          <button data-cmd="new">New <kbd>Ctrl+N</kbd></button>
+          <button data-cmd="open">Open… <kbd>Ctrl+O</kbd></button>
+          <button data-cmd="openFolder">Open folder…</button>
+          <hr>
+          <button data-cmd="save">Save <kbd>Ctrl+S</kbd></button>
+          <button data-cmd="saveAs">Save as… <kbd>Ctrl+Shift+S</kbd></button>
+          <hr>
+          <button data-cmd="exportHtml">Export HTML</button>
+          <button data-cmd="print">Print / PDF <kbd>Ctrl+P</kbd></button>
+        </div>
+      </div>
+    </div>
+    <div class="bar-title">
+      <span id="doc-name">Untitled.md</span><span id="dirty" title="Unsaved changes" hidden>•</span>
+    </div>
+    <div class="bar-right">
+      <button class="icon-btn toggle" id="btn-lock" title="Reading lock: click to read without editing" aria-label="Reading lock" aria-pressed="false">
+        <svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+      </button>
+      <button class="icon-btn toggle" id="btn-source" title="Source mode (Ctrl+/)" aria-label="Source mode" aria-pressed="false">
+        <svg viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5"/></svg>
+      </button>
+      <button class="icon-btn toggle" id="btn-focus" title="Focus mode (F8)" aria-label="Focus mode" aria-pressed="false">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M3 9V5a2 2 0 0 1 2-2h4M15 3h4a2 2 0 0 1 2 2v4M21 15v4a2 2 0 0 1-2 2h-4M9 21H5a2 2 0 0 1-2-2v-4"/></svg>
+      </button>
+      <button class="icon-btn toggle" id="btn-typewriter" title="Typewriter mode (F9)" aria-label="Typewriter mode" aria-pressed="false">
+        <svg viewBox="0 0 24 24"><path d="M4 12h16M4 7h10M4 17h13"/></svg>
+      </button>
+      <div class="menu-wrap">
+        <button class="icon-btn" id="btn-appearance" title="Appearance" aria-label="Appearance" aria-haspopup="true">
+          <svg viewBox="0 0 24 24"><path d="M4 20l5-14h2l5 14M6.5 14h7"/><path d="M17 9.5c0-1.4 1-2.5 2.5-2.5S22 8 22 9.5V15"/></svg>
+        </button>
+        <div class="menu menu-right" id="menu-appearance" hidden>
+          <div class="menu-label">Theme</div>
+          <div class="seg" id="seg-theme">
+            <button data-theme-choice="auto">Auto</button>
+            <button data-theme-choice="paper">Paper</button>
+            <button data-theme-choice="sepia">Sepia</button>
+            <button data-theme-choice="night">Night</button>
+          </div>
+          <div class="menu-label">Typeface</div>
+          <div class="seg" id="seg-font">
+            <button data-font-choice="serif">Serif</button>
+            <button data-font-choice="sans">Sans</button>
+            <button data-font-choice="mono">Mono</button>
+          </div>
+          <label class="menu-label" for="rng-size">Text size <output id="out-size"></output></label>
+          <input type="range" id="rng-size" min="14" max="24" step="1">
+          <label class="menu-label" for="rng-width">Line width <output id="out-width"></output></label>
+          <input type="range" id="rng-width" min="34" max="60" step="1">
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div id="layout">
+    <aside id="sidebar" aria-label="Sidebar">
+      <div class="tabs" role="tablist">
+        <button role="tab" data-tab="outline" aria-selected="true">Outline</button>
+        <button role="tab" data-tab="files" aria-selected="false">Files</button>
+      </div>
+      <nav id="outline" class="panel"></nav>
+      <div id="files" class="panel" hidden>
+        <div class="empty-note">
+          <p>Open a folder to browse its markdown files.</p>
+          <button class="text-btn primary" data-cmd="openFolder">Open folder…</button>
+          <p class="hint" id="folder-hint"></p>
+        </div>
+        <ul id="file-tree"></ul>
+      </div>
+    </aside>
+
+    <main id="scroller">
+      <article id="doc" class="markdown-body" aria-label="Document"></article>
+      <textarea id="source" spellcheck="false" hidden aria-label="Markdown source"></textarea>
+      <div id="tail" aria-hidden="true"></div>
+    </main>
+  </div>
+
+  <footer id="statusbar">
+    <span id="st-msg"></span>
+    <span class="spacer"></span>
+    <span id="st-words"></span>
+  </footer>
+
+  <div id="drop-overlay" hidden><div>Drop a markdown file to open it</div></div>
+  <input type="file" id="file-input" accept=".md,.markdown,.mdown,.mkd,.txt,text/markdown,text/plain" hidden>
+
+  <script src="js/markdown.js"></script>
+  <script src="js/editor.js"></script>
+  <script src="js/welcome.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
