@@ -26,6 +26,9 @@
           <button data-cmd="save">Save <kbd>Ctrl+S</kbd></button>
           <button data-cmd="saveAs">Save as… <kbd>Ctrl+Shift+S</kbd></button>
           <hr>
+          <button data-cmd="loadBib">Load bibliography… <kbd>Ctrl+Shift+B</kbd></button>
+          <button data-cmd="watch">Reload when file changes</button>
+          <hr>
           <button data-cmd="exportHtml">Export HTML</button>
           <button data-cmd="print">Print / PDF <kbd>Ctrl+P</kbd></button>
         </div>
@@ -92,7 +95,13 @@
     </aside>
 
     <main id="scroller">
+      <div id="banner" role="alert" hidden>
+        <span id="banner-msg"></span>
+        <button class="text-btn primary" id="banner-reload">Load their version</button>
+        <button class="text-btn" id="banner-keep">Keep mine</button>
+      </div>
       <article id="doc" class="markdown-body" aria-label="Document"></article>
+      <div id="refs-live" class="markdown-body" hidden></div>
       <textarea id="source" spellcheck="false" hidden aria-label="Markdown source"></textarea>
       <div id="tail" aria-hidden="true"></div>
     </main>
@@ -101,12 +110,18 @@
   <footer id="statusbar">
     <span id="st-msg"></span>
     <span class="spacer"></span>
+    <button class="st-item" id="st-changed" hidden title="Blocks that changed in the last reload. Click to step through them."></button>
+    <button class="st-item st-clear" id="st-changed-clear" title="Clear change markers" aria-label="Clear change markers">×</button>
+    <button class="st-item" id="st-bib" hidden></button>
+    <button class="st-item" id="st-watch" hidden></button>
     <span id="st-words"></span>
   </footer>
 
+  <div id="cite-pop" role="tooltip" hidden></div>
   <div id="drop-overlay" hidden><div>Drop a markdown file to open it</div></div>
   <input type="file" id="file-input" accept=".md,.markdown,.mdown,.mkd,.txt,text/markdown,text/plain" hidden>
 
+  <script src="js/bib.js"></script>
   <script src="js/markdown.js"></script>
   <script src="js/editor.js"></script>
   <script src="js/welcome.js"></script>

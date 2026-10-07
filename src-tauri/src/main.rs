@@ -99,6 +99,43 @@ fn list_markdown(dir: String) -> Vec<Entry> {
     walk(Path::new(&dir), 0)
 }
 
+#[derive(Serialize)]
+struct Stat {
+    modified: u64,
+    size: u64,
+}
+
+/// Modification time (ms since epoch) and size, used to watch open files.
+#[tauri::command]
+fn file_stat(path: String) -> Result<Stat, String> {
+    let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    Ok(Stat { modified, size: meta.len() })
+}
+
+/// Files directly inside `dir` with the given extension (e.g. "bib").
+#[tauri::command]
+fn list_files(dir: String, ext: String) -> Vec<String> {
+    let ext = ext.to_lowercase();
+    let mut out: Vec<String> = std::fs::read_dir(&dir)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_file())
+                .filter(|p| p.extension().and_then(|x| x.to_str()).map(|x| x.to_lowercase() == ext).unwrap_or(false))
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out
+}
+
 #[tauri::command]
 fn take_opened_files(state: State<'_, Pending>) -> Vec<String> {
     std::mem::take(&mut *state.0.lock().unwrap())
@@ -146,6 +183,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &item("save", "Save", Some("CmdOrCtrl+S"))?,
             &item("saveAs", "Save As…", Some("CmdOrCtrl+Shift+S"))?,
             &PredefinedMenuItem::separator(app)?,
+            &item("loadBib", "Load Bibliography…", Some("CmdOrCtrl+Shift+B"))?,
             &item("exportHtml", "Export as HTML…", None)?,
             &item("print", "Print…", Some("CmdOrCtrl+P"))?,
             &PredefinedMenuItem::separator(app)?,
@@ -176,6 +214,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &item("sidebar", "Toggle Sidebar", Some("CmdOrCtrl+\\"))?,
             &item("source", "Source Mode", Some("CmdOrCtrl+/"))?,
             &PredefinedMenuItem::separator(app)?,
+            &item("watch", "Reload When File Changes", None)?,
             &item("lock", "Reading Lock", Some("CmdOrCtrl+Shift+L"))?,
             &item("focus", "Focus Mode", Some("F8"))?,
             &item("typewriter", "Typewriter Mode", Some("F9"))?,
@@ -216,6 +255,8 @@ fn main() {
             write_text,
             read_data_url,
             list_markdown,
+            file_stat,
+            list_files,
             take_opened_files,
             print_page,
             quit_app

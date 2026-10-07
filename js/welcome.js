@@ -20,7 +20,10 @@ $$
 \operatorname{logit}(p_i) = \alpha + \beta_1 \text{democracy}_i + \beta_2 \log(\text{GDP}_i) + \varepsilon_i
 $$
 
-Pandoc-style citations stay visible and readable [@fearon1995; @schultz2001, p. 12], and footnotes show their text on hover.[^fn]
+Pandoc-style citations stay readable [@fearon1995; @schultz2001, p. 12]. Load your ¦.bib¦ (**File → Load bibliography**, or put one next to the document) and they become “(Fearon 1995; Schultz 2001, p. 12)”, with the full reference on hover and a reference list at the end. Keys that aren’t in your bibliography turn red, so citations an AI invented stand out. Footnotes show their text on hover.[^fn]
+
+> [!NOTE] Live reload
+> When another program changes the open file (Claude Code, an R script, ¦git pull¦), MDreader reloads it in place and marks the paragraphs that changed.
 
 | Model        | Coef. |  S.E. |    N |
 |:-------------|------:|------:|-----:|
@@ -50,6 +53,7 @@ summary(m)
 | Source mode (the whole file as plain text) | Ctrl+/ |
 | Focus mode / typewriter mode | F8 / F9 |
 | Open / save / save as | Ctrl+O / Ctrl+S / Ctrl+Shift+S |
+| Load a bibliography (.bib) | Ctrl+Shift+B |
 | Undo / redo across blocks | Ctrl+Z / Ctrl+Shift+Z |
 | Open a link | Ctrl+click |
 

@@ -579,3 +579,117 @@ body.locked .block { cursor: default; }
   .block.editing { background: none; box-shadow: none; }
   .markdown-body a { color: inherit; }
 }
+
+/* ------------------------------------------------- live reload & citations */
+
+#banner {
+  position: sticky;
+  top: 0;
+  z-index: 15;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  max-width: var(--measure);
+  margin: 12px auto 0;
+  padding: 10px 14px;
+  background: var(--bg-elev);
+  border: 1px solid var(--warn);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  font-size: 13px;
+}
+#banner-msg { flex: 1 1 220px; }
+
+.st-item {
+  border: 0;
+  background: transparent;
+  color: var(--fg-mute);
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.st-item:hover { background: var(--bg-hover); color: var(--fg); }
+#st-watch::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: var(--ok); vertical-align: 1px; }
+#st-watch.off::before { background: var(--fg-mute); }
+#st-changed { color: var(--accent); }
+#st-changed[hidden] + #st-changed-clear { display: none; }
+.st-clear { padding: 2px 4px; margin-left: -10px; }
+#st-bib.warn { color: var(--danger); font-weight: 600; }
+
+/* blocks that changed in the last reload from disk */
+.block.changed::before {
+  content: "";
+  position: absolute;
+  left: -18px;
+  top: 2px;
+  bottom: 2px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0.55;
+}
+.block.just-changed { animation: just-changed 2.4s ease-out; }
+@keyframes just-changed {
+  from { background: var(--mark); box-shadow: 0 0 0 6px var(--mark); }
+  to { background: transparent; box-shadow: 0 0 0 6px transparent; }
+}
+
+/* resolved citations read as text, with a dotted underline to hover */
+.cite.resolved {
+  color: inherit;
+  background: none;
+  padding: 0;
+  font-size: inherit;
+  white-space: normal;
+  text-decoration: underline dotted color-mix(in srgb, var(--cite) 70%, transparent);
+  text-underline-offset: 3px;
+  cursor: help;
+}
+.cite-key {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  color: var(--danger);
+  text-decoration: underline wavy var(--danger);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.cite.pulse { animation: just-changed 1.2s ease-out; }
+
+#cite-pop {
+  position: fixed;
+  z-index: 60;
+  max-height: 50vh;
+  overflow: auto;
+  padding: 10px 14px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--fg);
+}
+#cite-pop .pop-ref + .pop-ref { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+#cite-pop .pop-ref.missing { color: var(--danger); }
+#cite-pop a { color: var(--accent); word-break: break-all; }
+
+#refs-live { max-width: var(--measure); margin: 0 auto; padding: 2.2em 32px 0; }
+.refs h2 { font-size: 1.5em; font-weight: 650; margin: 0 0 0.6em; padding-bottom: 0.15em; border-bottom: 1px solid var(--border); }
+.refs ol { list-style: none; margin: 0; padding: 0; }
+.refs li { padding-left: 1.6em; text-indent: -1.6em; margin: 0.4em 0; font-size: 0.92em; line-height: 1.55; }
+.refs a { color: var(--accent); word-break: break-all; }
+
+@media (max-width: 760px) {
+  #refs-live { padding: 2em 16px 0; }
+  #banner { margin: 8px 12px 0; }
+  .block.changed::before { left: -10px; }
+}
+@media print {
+  #banner, #cite-pop { display: none !important; }
+  .block.changed::before { display: none; }
+  .cite.resolved { text-decoration: none; }
+}

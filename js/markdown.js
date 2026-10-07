@@ -170,8 +170,8 @@
   // ---------------------------------------------------- document context
 
   /** Collect link reference and footnote definitions from the whole doc. */
-  function buildContext(blocks) {
-    const ctx = { links: {}, footnotes: {}, footnoteOrder: [], slugs: {} };
+  function buildContext(blocks, extra) {
+    const ctx = Object.assign({ links: {}, footnotes: {}, footnoteOrder: [], slugs: {}, bib: null }, extra || {});
     blocks.forEach((b) => {
       b.split('\n').forEach((line) => {
         let m = line.match(RE.footnoteDef);
@@ -567,10 +567,15 @@
     });
 
     // pandoc citations: [@key], [see @key, p. 4; @other]
-    s = s.replace(/\[((?:[^\[\]]*?[\s;])?-?@\w[^\[\]]*)\]/g, (all, body) => {
-      const keys = (body.match(/(?<![\w])@\w[\w:.#$%&+?~\/-]*/g) || []).map((k) => k.slice(1).replace(/[.:]+$/, ''));
-      return put('<span class="cite" data-keys="' + keys.join(',') + '">[' + emphasis(body) + ']</span>');
-    });
+    s = s.replace(/\[((?:[^\[\]]*?[\s;])?-?@\w[^\[\]]*)\]/g, (all, body) => put(renderCitation(body, ctx)));
+
+    // in-text citations: @key says...  (only with a bibliography loaded)
+    if (ctx.bib) {
+      s = s.replace(/(^|[\s(])(-?)@([A-Za-z][\w:.#$%&+?~\/-]*\w)/g, (all, pre, minus, key) => {
+        const html = renderInTextCitation(key, minus === '-', ctx);
+        return html ? pre + put(html) : all;
+      });
+    }
 
     // reference links: [text][id], [text][], [text]
     s = s.replace(/\[((?:[^\[\]]|\[[^\[\]]*\])+)\](?:\[([^\]]*)\])?/g, (all, label, ref) => {
@@ -599,6 +604,56 @@
       s = s.replace(/\u0000(\d+)\u0000/g, (_, n) => stash[+n]);
     }
     return s;
+  }
+
+  const Bib = root.Bib || (typeof require === 'function' ? require('./bib.js') : null);
+  // Typical generated citation keys: smith2020, smithJones2020a, smith_2020_title
+  const CITEKEY_LIKE = /^[A-Za-z][A-Za-z_-]*_?\d{4}[a-z]?(?:[_:-]\w+)?$/;
+
+  function citeKeysOf(body) {
+    return (body.match(/(?<![\w])@\w[\w:.#$%&+?~\/-]*/g) || []).map((k) => k.slice(1).replace(/[.:]+$/, ''));
+  }
+
+  function citeSpan(cls, keys, missing, inner) {
+    return (
+      '<span class="' + cls + (missing.length ? ' missing' : '') + '" data-keys="' + escapeHtml(keys.join(',')) + '"' +
+      (missing.length ? ' data-missing="' + escapeHtml(missing.join(',')) + '"' : '') + '>' + inner + '</span>'
+    );
+  }
+
+  /** [see @doe99, p. 4; @roe02] -> (see Doe 1999, p. 4; Roe 2002) when a bibliography is loaded. */
+  function renderCitation(body, ctx) {
+    const lib = ctx.bib;
+    const items = Bib ? Bib.parseCitation(body) : [];
+    if (!lib || !items.length) {
+      return citeSpan('cite', citeKeysOf(body), [], '[' + emphasis(body) + ']');
+    }
+    const missing = [];
+    const parts = items.map((it) => {
+      const lab = lib.labels[it.key];
+      let ref;
+      if (!lab) {
+        missing.push(it.key);
+        ref = '<span class="cite-key">@' + it.key + '</span>';
+      } else {
+        ref = escapeHtml(it.suppress ? lab.year : lab.author + ' ' + lab.year);
+      }
+      return (it.prefix ? emphasis(it.prefix) + ' ' : '') + ref + (it.suffix ? ', ' + emphasis(it.suffix) : '');
+    });
+    return citeSpan('cite resolved', items.map((it) => it.key), missing, '(' + parts.join('; ') + ')');
+  }
+
+  /** @doe99 says -> Doe (1999) says. Unknown keys are flagged only if they look like citation keys. */
+  function renderInTextCitation(key, suppress, ctx) {
+    const lib = ctx.bib;
+    const clean = key.replace(/[.:]+$/, '');
+    const lab = lib.labels[clean];
+    if (!lab) {
+      if (!CITEKEY_LIKE.test(clean)) return null;
+      return citeSpan('cite resolved in-text', [clean], [clean], '<span class="cite-key">@' + escapeHtml(clean) + '</span>');
+    }
+    const text = suppress ? lab.year : lab.author + ' (' + lab.year + ')';
+    return citeSpan('cite resolved in-text', [clean], [], escapeHtml(text));
   }
 
   function emphasis(s) {
@@ -637,10 +692,27 @@
   }
 
   /** Render a whole document to HTML (used for export). */
-  function renderDocument(src) {
+  function renderDocument(src, extra) {
     const blocks = splitBlocks(src);
-    const ctx = buildContext(blocks);
+    const ctx = buildContext(blocks, extra);
     return blocks.map((b, k) => renderBlock(b, ctx, { first: k === 0 })).join('\n');
+  }
+
+  /** Values of `bibliography:` in YAML front matter (string or list). */
+  function frontMatterBibliography(src) {
+    const m = String(src).match(/^---\n([\s\S]*?)\n(?:---|\.\.\.)\s*(\n|$)/);
+    if (!m) return [];
+    const lines = m[1].split('\n');
+    const out = [];
+    for (let k = 0; k < lines.length; k++) {
+      const b = lines[k].match(/^bibliography:\s*(.*)$/);
+      if (!b) continue;
+      const v = b[1].trim();
+      if (v.startsWith('[')) v.slice(1, -1).split(',').forEach((x) => out.push(x));
+      else if (v) out.push(v);
+      else while (k + 1 < lines.length && /^\s*-\s+/.test(lines[k + 1])) out.push(lines[++k].replace(/^\s*-\s+/, ''));
+    }
+    return out.map((x) => x.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
   }
 
   const MD = {
@@ -648,6 +720,7 @@
     buildContext,
     renderBlock,
     renderDocument,
+    frontMatterBibliography,
     inline,
     escapeHtml,
     plainText,
