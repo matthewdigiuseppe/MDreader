@@ -39,6 +39,8 @@ npm run mac:build    # universal .dmg in src-tauri/target/universal-apple-darwin
 ## Features
 
 - **Inline live preview:** each block switches between its rendered form and its markdown source.
+- **Live reload:** when another program changes the open file (an AI agent, an R script, `git pull`), MDreader reloads it in place and keeps your scroll position. Changed blocks get a margin bar; click *N changed* in the status bar to step through them. If you have unsaved edits, a banner asks whether to load the new version or keep yours (undo brings yours back). Toggle with the *Live* badge.
+- **Bibliographies:** citations like `[@fearon1995, p. 4]` and `@fearon1995` render author–date, "(Fearon 1995, p. 4)" and "Fearon (1995)", with the full reference on hover and a *References* list at the end. Keys missing from your `.bib` are underlined in red and counted in the status bar, which is the fastest way to catch citations an AI made up. MDreader uses the `bibliography:` field in the front matter, else a file chosen with *File → Load bibliography* (⌘⇧B), else any `.bib` next to the document. The `.bib` reloads when Zotero or Better BibTeX re-exports it.
 - **Academic markdown:** `$inline$` and `$$display$$` math (KaTeX), pandoc citations `[@key, p. 4]`, footnotes with hover text, booktabs-style tables, YAML front matter, `> [!NOTE]` callouts, task lists, highlights `==x==`, sub/superscript `H~2~O`, `x^2^`.
 - **Code blocks** with syntax highlighting (highlight.js) and auto-closed fences.
 - **Outline** sidebar that tracks your scroll position, plus a **file browser** for a whole project folder (Chromium browsers). Relative image paths resolve against the opened folder.

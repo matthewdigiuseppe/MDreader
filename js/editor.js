@@ -75,6 +75,7 @@
       this.active = null; // { id, ta, initial }
       this.history = [];
       this.future = [];
+      this.bib = null; // citation library (see js/bib.js), set by the app
       this.ctx = MD.buildContext([]);
       this.ctxKey = '';
       this.bind();
@@ -92,6 +93,57 @@
       }
       this.lastSnapshot = this.getMarkdown();
       this.renderAll();
+    }
+
+    /** Use a new bibliography and re-render (keeps the block being edited). */
+    setBibliography(lib) {
+      this.bib = lib;
+      const active = this.active;
+      this.ctx = MD.buildContext(this.blocks.map((b) => b.src), { bib: lib });
+      this.blocks.forEach((b, k) => {
+        if (active && active.id === b.id) return;
+        const el = this.blockElement(b.id);
+        if (el) this.fillBlock(el, b, k);
+      });
+      this.afterRender();
+    }
+
+    /**
+     * Replace the document with a new version from disk, keeping the reader's
+     * place. Returns the ids of blocks whose text changed.
+     */
+    reload(md) {
+      const scroller = this.el.parentElement;
+      // anchor: first block visible at the top of the viewport
+      let anchor = null;
+      if (scroller) {
+        const top = scroller.getBoundingClientRect().top;
+        for (const b of this.blocks) {
+          const el = this.blockElement(b.id);
+          if (el && el.getBoundingClientRect().bottom > top) {
+            anchor = { src: b.src, index: this.blocks.indexOf(b), offset: el.getBoundingClientRect().top - top };
+            break;
+          }
+        }
+      }
+      const before = this.getMarkdown();
+      const oldSet = new Set(this.blocks.map((b) => b.src));
+      this.active = null;
+      this.blocks = MD.splitBlocks(md).map((src) => ({ id: nextId++, src }));
+      if (!this.blocks.length) this.blocks.push({ id: nextId++, src: '' });
+      if (before !== this.getMarkdown()) {
+        this.history.push(before);
+        this.future = [];
+      }
+      this.lastSnapshot = this.getMarkdown();
+      this.renderAll();
+      const changed = this.blocks.filter((b) => !oldSet.has(b.src) && b.src.trim()).map((b) => b.id);
+      if (scroller && anchor) {
+        const same = this.blocks.find((b) => b.src === anchor.src) || this.blocks[Math.min(anchor.index, this.blocks.length - 1)];
+        const el = same && this.blockElement(same.id);
+        if (el) scroller.scrollTop += el.getBoundingClientRect().top - scroller.getBoundingClientRect().top - anchor.offset;
+      }
+      return changed;
     }
 
     getMarkdown() {
@@ -134,7 +186,7 @@
     // ---------------------------------------------------------- rendering
 
     renderAll() {
-      this.ctx = MD.buildContext(this.blocks.map((b) => b.src));
+      this.ctx = MD.buildContext(this.blocks.map((b) => b.src), { bib: this.bib });
       this.ctxKey = JSON.stringify([this.ctx.links, this.ctx.footnotes, this.ctx.footnoteOrder]);
       const frag = document.createDocumentFragment();
       this.ctx.slugs = {};
@@ -293,7 +345,7 @@
         if (el) this.fillBlock(el, this.blocks[k], k);
       }
 
-      const newCtx = MD.buildContext(this.blocks.map((b) => b.src));
+      const newCtx = MD.buildContext(this.blocks.map((b) => b.src), { bib: this.bib });
       const key = JSON.stringify([newCtx.links, newCtx.footnotes, newCtx.footnoteOrder]);
       if (key !== this.ctxKey) this.renderAll();
       else this.afterRender();

@@ -196,11 +196,15 @@
   const scroller = $('#scroller');
 
   const editor = new window.BlockEditor(docEl, {
-    enhance,
+    enhance: (el) => {
+      enhance(el);
+      if (el.dataset && changedBlocks.has(+el.dataset.id)) el.classList.add('changed');
+    },
     onChange: () => {
       updateDirty();
       scheduleOutline();
       scheduleDraft();
+      scheduleBibCheck();
     },
     onInput: () => {
       updateDirty();
@@ -259,6 +263,11 @@
     highlightCurrentFile();
     buildOutline();
     updateStats();
+    changedBlocks.clear();
+    updateChangedBadge();
+    hideBanner();
+    resetWatch();
+    refreshBibliography();
   }
 
   function updateDirty() {
@@ -337,7 +346,30 @@
     e.target.value = '';
   });
 
+  // Saving changes the file's timestamp; pause the watcher so our own write
+  // is not mistaken for an outside change.
   async function cmdSave() {
+    watch.saving++;
+    try {
+      await doSave();
+    } finally {
+      watch.saving--;
+      resetWatch();
+    }
+  }
+
+  async function cmdSaveAs() {
+    watch.saving++;
+    try {
+      await doSaveAs();
+    } finally {
+      watch.saving--;
+      resetWatch();
+      refreshBibliography();
+    }
+  }
+
+  async function doSave() {
     if (state.sourceMode) syncFromSource();
     editor.commit();
     const text = currentText();
@@ -365,10 +397,10 @@
         return;
       }
     }
-    return cmdSaveAs();
+    return doSaveAs();
   }
 
-  async function cmdSaveAs() {
+  async function doSaveAs() {
     if (state.sourceMode) syncFromSource();
     editor.commit();
     const text = currentText();
@@ -411,6 +443,7 @@
 
   function markSaved(text) {
     state.savedText = text;
+    hideBanner();
     updateDirty();
     store.set('draft', { name: state.name, text, saved: true, path: state.path });
   }
@@ -677,6 +710,463 @@
     scrollRaf = requestAnimationFrame(markActiveHeading);
   });
 
+  // ------------------------------------------------------ live reload
+
+  // Watch the open file and reload it when another program (an AI agent,
+  // an R script, git) changes it, keeping your place in the document.
+  const watch = { on: store.get('watch', true), sig: null, busy: false, saving: 0, pending: null };
+  const changedBlocks = new Set();
+
+  function canWatch() {
+    return !!((TAURI && state.path) || (state.handle && state.handle.getFile));
+  }
+
+  async function fileSignature() {
+    if (TAURI && state.path) {
+      const st = await invoke('file_stat', { path: state.path });
+      return st.modified + ':' + st.size;
+    }
+    const f = await state.handle.getFile();
+    return f.lastModified + ':' + f.size;
+  }
+
+  async function readOpenFile() {
+    if (TAURI && state.path) return invoke('read_text', { path: state.path });
+    return (await state.handle.getFile()).text();
+  }
+
+  function resetWatch() {
+    watch.sig = null;
+    updateWatchBadge();
+    if (!canWatch()) return;
+    fileSignature()
+      .then((sig) => (watch.sig = sig))
+      .catch(() => {});
+  }
+
+  // Normalise text the way the editor writes it, so a file that is merely
+  // re-saved by another program does not count as changed.
+  function normalize(text) {
+    const md = MD.splitBlocks(text)
+      .map((b) => b.replace(/\s+$/, ''))
+      .filter(Boolean)
+      .join('\n\n');
+    return md ? md + '\n' : '';
+  }
+
+  async function pollFile() {
+    if (!watch.on || watch.busy || watch.saving || !canWatch()) return;
+    watch.busy = true;
+    try {
+      const sig = await fileSignature();
+      if (watch.sig === null) watch.sig = sig;
+      else if (sig !== watch.sig) {
+        watch.sig = sig;
+        onExternalChange(await readOpenFile());
+      }
+    } catch (e) {
+      /* file moved or deleted, or permission lost: try again later */
+    } finally {
+      watch.busy = false;
+    }
+  }
+
+  function onExternalChange(text) {
+    if (normalize(text) === state.savedText) return; // nothing new (e.g. our own save)
+    if (state.dirty) {
+      watch.pending = text;
+      showBanner('“' + state.name + '” was changed by another program.');
+      return;
+    }
+    applyDiskVersion(text);
+  }
+
+  function applyDiskVersion(text) {
+    hideBanner();
+    if (editor.active) editor.commit();
+    const changed = editor.reload(text);
+    if (state.sourceMode) {
+      sourceEl.value = editor.getMarkdown();
+      autosizeSource();
+    }
+    state.savedText = editor.getMarkdown();
+    updateDirty();
+    changedBlocks.clear();
+    changed.forEach((id) => changedBlocks.add(id));
+    changed.forEach((id) => {
+      const el = editor.blockElement(id);
+      if (el) el.classList.add('changed', 'just-changed');
+    });
+    setTimeout(() => $$('.block.just-changed').forEach((el) => el.classList.remove('just-changed')), 2500);
+    updateChangedBadge();
+    store.set('draft', { name: state.name, text: state.savedText, saved: true, path: state.path });
+    buildOutline();
+    updateStats();
+    flash('Reloaded ' + state.name + (changed.length ? ' · ' + changed.length + ' changed block' + (changed.length > 1 ? 's' : '') : ''));
+  }
+
+  function showBanner(msg) {
+    $('#banner-msg').textContent = msg;
+    $('#banner').hidden = false;
+  }
+  function hideBanner() {
+    watch.pending = null;
+    $('#banner').hidden = true;
+  }
+  $('#banner-reload').addEventListener('click', () => {
+    if (watch.pending !== null) applyDiskVersion(watch.pending);
+  });
+  $('#banner-keep').addEventListener('click', () => {
+    hideBanner();
+    flash('Keeping your version. Saving will overwrite the file on disk.');
+  });
+
+  function updateWatchBadge() {
+    const b = $('#st-watch');
+    b.hidden = !canWatch();
+    b.classList.toggle('off', !watch.on);
+    b.textContent = watch.on ? 'Live' : 'Live off';
+    b.title = watch.on
+      ? 'Reloading automatically when the file changes on disk. Click to turn off.'
+      : 'Not watching the file for outside changes. Click to turn on.';
+  }
+
+  function toggleWatch() {
+    watch.on = !watch.on;
+    store.set('watch', watch.on);
+    updateWatchBadge();
+    flash(watch.on ? 'Reloading when the file changes on disk' : 'No longer watching the file for changes');
+    if (watch.on) resetWatch();
+  }
+  $('#st-watch').addEventListener('click', toggleWatch);
+
+  // Changed-block markers: click the badge to step through them.
+  function updateChangedBadge() {
+    const b = $('#st-changed');
+    // drop ids of blocks that no longer exist
+    changedBlocks.forEach((id) => {
+      if (!editor.blocks.some((x) => x.id === id)) changedBlocks.delete(id);
+    });
+    b.hidden = !changedBlocks.size;
+    b.textContent = changedBlocks.size + ' changed';
+  }
+  let changedCursor = -1;
+  $('#st-changed').addEventListener('click', (e) => {
+    if (e.target.closest('.clear')) return;
+    const ids = editor.blocks.filter((x) => changedBlocks.has(x.id)).map((x) => x.id);
+    if (!ids.length) return;
+    changedCursor = (changedCursor + 1) % ids.length;
+    const el = editor.blockElement(ids[changedCursor]);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('just-changed');
+      setTimeout(() => el.classList.remove('just-changed'), 1500);
+    }
+  });
+  $('#st-changed-clear').addEventListener('click', () => {
+    changedBlocks.clear();
+    $$('.block.changed').forEach((el) => el.classList.remove('changed'));
+    updateChangedBadge();
+  });
+
+  setInterval(pollFile, 1000);
+  window.addEventListener('focus', pollFile);
+
+  // ----------------------------------------------------- bibliography
+
+  // Where references come from, in order of preference:
+  //   1. `bibliography:` in the document's YAML front matter (pandoc style)
+  //   2. a .bib file loaded with File → Load bibliography
+  //   3. any .bib file next to the document
+  const bib = {
+    lib: null,
+    sources: [], // [{ label, read(), sig() }]
+    sigs: [],
+    key: '',
+    manual: null, // { label, read, sig } chosen by the user this session
+  };
+
+  async function handleFromStack(stack, rel) {
+    const st = stack.slice();
+    const parts = rel.split('/');
+    const name = parts.pop();
+    for (const p of parts) {
+      if (!p || p === '.') continue;
+      if (p === '..') {
+        if (st.length > 1) st.pop();
+        continue;
+      }
+      st.push(await st[st.length - 1].getDirectoryHandle(p));
+    }
+    return st[st.length - 1].getFileHandle(name);
+  }
+
+  function pathSource(p) {
+    return {
+      label: basename(p),
+      path: p,
+      read: () => invoke('read_text', { path: p }),
+      sig: () => invoke('file_stat', { path: p }).then((st) => st.modified + ':' + st.size),
+    };
+  }
+  function handleSource(h) {
+    return {
+      label: h.name,
+      read: () => h.getFile().then((f) => f.text()),
+      sig: () => h.getFile().then((f) => f.lastModified + ':' + f.size),
+    };
+  }
+
+  async function findBibSources() {
+    const declared = MD.frontMatterBibliography(currentText());
+    const out = [];
+    for (const rel of declared) {
+      try {
+        if (TAURI) {
+          if (rel.startsWith('/')) out.push(pathSource(rel));
+          else if (state.path) out.push(pathSource(joinPath(dirname(state.path), rel)));
+        } else if (state.dirStack) {
+          out.push(handleSource(await handleFromStack(state.dirStack, rel)));
+        }
+      } catch (e) {
+        flash('Bibliography not found: ' + rel);
+      }
+    }
+    if (out.length) return out;
+    if (bib.manual) return [bib.manual];
+    if (TAURI) {
+      const remembered = store.get('bibPath', null);
+      if (remembered) return [pathSource(remembered)];
+      if (state.path) return (await invoke('list_files', { dir: dirname(state.path), ext: 'bib' })).map(pathSource);
+    } else {
+      const saved = store.get('bibText', null);
+      if (saved && saved.text) return [{ label: saved.label, read: async () => saved.text, sig: async () => 'stored' }];
+      if (state.dirStack) {
+        const dir = state.dirStack[state.dirStack.length - 1];
+        const found = [];
+        for await (const [name, h] of dir.entries()) {
+          if (h.kind === 'file' && /\.bib$/i.test(name)) found.push(handleSource(h));
+        }
+        return found;
+      }
+    }
+    return [];
+  }
+
+  let bibSeq = 0;
+  async function refreshBibliography() {
+    const seq = ++bibSeq;
+    let sources = [];
+    try {
+      sources = await findBibSources();
+    } catch (e) {
+      sources = [];
+    }
+    if (seq !== bibSeq) return;
+    if (!sources.length) {
+      bib.sources = [];
+      bib.sigs = [];
+      setLibrary(null);
+      return;
+    }
+    try {
+      const sigs = await Promise.all(sources.map((src) => src.sig().catch(() => '')));
+      const texts = await Promise.all(sources.map((src) => src.read()));
+      if (seq !== bibSeq) return;
+      bib.sources = sources;
+      bib.sigs = sigs;
+      const lib = window.Bib.merge(texts.map((t, k) => window.Bib.fromText(t, sources[k].label)));
+      setLibrary(lib);
+    } catch (e) {
+      flash('Could not read bibliography: ' + (e.message || e));
+      setLibrary(null);
+    }
+  }
+
+  function setLibrary(lib) {
+    const before = bib.lib ? bib.lib.keys.length + bib.lib.source : '';
+    bib.lib = lib;
+    editor.setBibliography(lib);
+    if (lib && before !== lib.keys.length + lib.source) {
+      flash('Bibliography: ' + lib.source + ' · ' + lib.keys.length + ' entries' + (lib.errors.length ? ' · ' + lib.errors.length + ' unreadable' : ''));
+    }
+    scheduleBibCheck();
+  }
+
+  // Reload the .bib when it changes (Zotero / Better BibTeX auto-export).
+  async function pollBib() {
+    if (!bib.sources.length || watch.busy) return;
+    try {
+      const sigs = await Promise.all(bib.sources.map((src) => src.sig().catch(() => '')));
+      if (sigs.join('|') !== bib.sigs.join('|')) refreshBibliography();
+    } catch (e) {
+      /* ignore */
+    }
+  }
+  setInterval(pollBib, 2000);
+
+  // Re-resolve sources when the front matter's bibliography line changes.
+  let lastDeclared = '';
+  let bibTimer = null;
+  function scheduleBibCheck() {
+    clearTimeout(bibTimer);
+    bibTimer = setTimeout(() => {
+      const declared = MD.frontMatterBibliography(currentText()).join('|');
+      if (declared !== lastDeclared) {
+        lastDeclared = declared;
+        refreshBibliography();
+        return;
+      }
+      updateCitationStatus();
+      buildReferences();
+    }, 250);
+  }
+
+  async function cmdLoadBib() {
+    try {
+      if (TAURI) {
+        const p = await TAURI.dialog.open({ multiple: false, filters: [{ name: 'BibTeX', extensions: ['bib', 'bibtex'] }] });
+        if (!p) return;
+        store.set('bibPath', p);
+        bib.manual = pathSource(p);
+      } else if (hasFS) {
+        const [h] = await window.showOpenFilePicker({ types: [{ description: 'BibTeX', accept: { 'text/plain': ['.bib', '.bibtex'] } }] });
+        bib.manual = handleSource(h);
+        rememberBibText(h.name, await (await h.getFile()).text());
+      } else {
+        const text = await pickTextFile('.bib,.bibtex');
+        if (!text) return;
+        bib.manual = { label: text.name, read: async () => text.text, sig: async () => 'picked' };
+        rememberBibText(text.name, text.text);
+      }
+      lastDeclared = MD.frontMatterBibliography(currentText()).join('|');
+      if (lastDeclared) flash('This document names its own bibliography in its front matter; using that one.');
+      refreshBibliography();
+    } catch (e) {
+      if (e.name !== 'AbortError') flash('Could not load bibliography: ' + (e.message || e));
+    }
+  }
+
+  function rememberBibText(label, text) {
+    if (text.length > 3e6) return; // too big for browser storage; reload it next time
+    store.set('bibText', { label, text });
+  }
+
+  function pickTextFile(accept) {
+    return new Promise((resolve) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = accept;
+      input.onchange = async () => {
+        const f = input.files[0];
+        resolve(f ? { name: f.name, text: await f.text() } : null);
+      };
+      input.click();
+    });
+  }
+
+  // ---- status: missing citations
+  let missingCursor = -1;
+  function updateCitationStatus() {
+    const b = $('#st-bib');
+    if (!bib.lib) {
+      b.hidden = true;
+      return;
+    }
+    const missing = new Set();
+    $$('#doc .cite.missing').forEach((c) => (c.dataset.missing || '').split(',').forEach((k) => k && missing.add(k)));
+    b.hidden = false;
+    b.classList.toggle('warn', missing.size > 0);
+    b.textContent = missing.size
+      ? missing.size + ' unknown citation' + (missing.size > 1 ? 's' : '')
+      : bib.lib.source + ' · ' + bib.lib.keys.length;
+    b.title = missing.size
+      ? 'Not in ' + bib.lib.source + ': ' + Array.from(missing).join(', ') + '. These may not exist. Click to step through them.'
+      : 'Bibliography: ' + bib.lib.source + ' (' + bib.lib.keys.length + ' entries). Click to load a different one.';
+  }
+  $('#st-bib').addEventListener('click', () => {
+    const items = $$('#doc .cite.missing');
+    if (!items.length) {
+      cmdLoadBib();
+      return;
+    }
+    missingCursor = (missingCursor + 1) % items.length;
+    const el = items[missingCursor];
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('pulse');
+    setTimeout(() => el.classList.remove('pulse'), 1200);
+  });
+
+  // ---- references list at the end of the document
+  function citedKeys(nodes) {
+    const keys = [];
+    nodes.forEach((c) =>
+      (c.dataset.keys || '').split(',').forEach((k) => {
+        if (k && bib.lib && bib.lib.entries[k] && !keys.includes(k)) keys.push(k);
+      })
+    );
+    return keys;
+  }
+
+  function referencesHtml(nodes) {
+    if (!bib.lib) return '';
+    const keys = window.Bib.sortKeys(citedKeys(nodes), bib.lib);
+    if (!keys.length) return '';
+    return (
+      '<section class="refs" id="refs"><h2>References</h2><ol>' +
+      keys.map((k) => '<li id="ref-' + MD.escapeHtml(k) + '">' + window.Bib.formatReference(bib.lib.entries[k]) + '</li>').join('') +
+      '</ol></section>'
+    );
+  }
+
+  function buildReferences() {
+    const el = $('#refs-live');
+    el.innerHTML = referencesHtml($$('#doc .cite'));
+    el.hidden = !el.innerHTML || state.sourceMode;
+  }
+
+  // ---- hover card with the full reference
+  const pop = $('#cite-pop');
+  let popTimer = null;
+  function showPop(target) {
+    clearTimeout(popTimer);
+    const keys = (target.dataset.keys || '').split(',').filter(Boolean);
+    if (!keys.length || !bib.lib) return;
+    pop.innerHTML = keys
+      .map((k) =>
+        bib.lib.entries[k]
+          ? '<div class="pop-ref">' + window.Bib.formatReference(bib.lib.entries[k]) + '</div>'
+          : '<div class="pop-ref missing"><strong>@' + MD.escapeHtml(k) + '</strong> is not in ' + MD.escapeHtml(bib.lib.source) +
+            '. Check that this source exists before relying on it.</div>'
+      )
+      .join('');
+    pop.hidden = false;
+    const r = target.getBoundingClientRect();
+    const w = Math.min(420, window.innerWidth - 24);
+    pop.style.width = w + 'px';
+    pop.style.left = Math.max(12, Math.min(r.left, window.innerWidth - w - 12)) + 'px';
+    const below = r.bottom + 8;
+    pop.style.top = (below + pop.offsetHeight > window.innerHeight - 12 ? r.top - pop.offsetHeight - 8 : below) + 'px';
+  }
+  function hidePopSoon() {
+    clearTimeout(popTimer);
+    popTimer = setTimeout(() => (pop.hidden = true), 250);
+  }
+  document.addEventListener('mouseover', (e) => {
+    const c = e.target.closest && e.target.closest('.cite.resolved, #doc .cite');
+    if (c && bib.lib) showPop(c);
+    else if (e.target.closest && e.target.closest('#cite-pop')) clearTimeout(popTimer);
+  });
+  document.addEventListener('mouseout', (e) => {
+    if (e.target.closest && (e.target.closest('.cite') || e.target.closest('#cite-pop'))) hidePopSoon();
+  });
+  pop.addEventListener('click', (e) => {
+    const a = e.target.closest('a');
+    if (!a) return;
+    e.preventDefault();
+    editor.opts.openLink(a.getAttribute('href'));
+  });
+
   // ------------------------------------------------------------ stats
 
   function updateStats() {
@@ -713,6 +1203,7 @@
       sourceEl.value = editor.getMarkdown();
       docEl.hidden = true;
       sourceEl.hidden = false;
+      $('#refs-live').hidden = true;
       state.sourceMode = true;
       autosizeSource();
       sourceEl.focus({ preventScroll: true });
@@ -857,6 +1348,7 @@ img{max-width:100%}hr{border:0;height:1px;background:#e3dfd6}mark{background:#fb
 .fn-ref{font-size:.72em;line-height:0}.fn-ref a{text-decoration:none}
 .footnote-def{display:flex;gap:.6em;font-size:.86em;color:#4b4741}.fn-label{color:#2f5d8a;min-width:1.2em}
 .link-def{display:none}
+.refs h2{font-size:1.5em}.refs ol{list-style:none;padding:0}.refs li{padding-left:1.6em;text-indent:-1.6em;margin:.35em 0;font-size:.92em}
 .front-matter{font:.78em system-ui,sans-serif;background:#f3f1ec;border-radius:8px;padding:8px 12px}
 .front-matter table{border:0;margin:0}.front-matter th{color:#8a857c;font-weight:500}
 @media print{body{background:#fff}main{padding:0}}`;
@@ -865,7 +1357,8 @@ img{max-width:100%}hr{border:0;height:1px;background:#e3dfd6}mark{background:#fb
     editor.commit();
     const md = currentText();
     const wrap = document.createElement('main');
-    wrap.innerHTML = MD.renderDocument(md);
+    wrap.innerHTML = MD.renderDocument(md, { bib: bib.lib });
+    wrap.insertAdjacentHTML('beforeend', referencesHtml(Array.from(wrap.querySelectorAll('.cite'))));
     let katexLink = '';
     if (wrap.querySelector('.math-inline, .math-block')) {
       try {
@@ -935,6 +1428,8 @@ img{max-width:100%}hr{border:0;height:1px;background:#e3dfd6}mark{background:#fb
     focus: () => toggleFocus(),
     typewriter: () => toggleTypewriter(),
     lock: () => toggleLock(),
+    loadBib: () => cmdLoadBib(),
+    watch: () => toggleWatch(),
   };
 
   // In the desktop app one shortcut can arrive twice: as a key event in the
@@ -1021,6 +1516,9 @@ img{max-width:100%}hr{border:0;height:1px;background:#e3dfd6}mark{background:#fb
     } else if (mod && e.shiftKey && key === 'l') {
       e.preventDefault();
       runCommand('lock', 'key');
+    } else if (mod && e.shiftKey && key === 'b') {
+      e.preventDefault();
+      runCommand('loadBib', 'key');
     } else if (e.key === 'F8') {
       e.preventDefault();
       runCommand('focus', 'key');
@@ -1065,7 +1563,11 @@ img{max-width:100%}hr{border:0;height:1px;background:#e3dfd6}mark{background:#fb
   }
 
   const draft = store.get('draft', null);
-  if (draft && typeof draft.text === 'string' && draft.text.trim()) {
+  if (TAURI && draft && draft.path && draft.saved) {
+    // the file may have changed while the app was closed: read it fresh
+    loadText(draft.text || '', draft.name, null, null, draft.path);
+    openPath(draft.path);
+  } else if (draft && typeof draft.text === 'string' && draft.text.trim()) {
     loadText(draft.text, draft.name, null, null, TAURI ? draft.path : null);
     if (!draft.saved) {
       state.savedText = '';

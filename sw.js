@@ -1,9 +1,10 @@
 // Offline cache for the app shell (only active when served over http/https).
-const CACHE = 'mdreader-v1';
+const CACHE = 'mdreader-v2';
 const SHELL = [
   './',
   './index.html',
   './css/styles.css',
+  './js/bib.js',
   './js/markdown.js',
   './js/editor.js',
   './js/welcome.js',
